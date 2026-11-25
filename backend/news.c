@@ -1,7 +1,17 @@
 #include "backend.h"
 #include "vendor/yxml.h"
+#ifdef _WIN32
 #include <windows.h>
 #include <wininet.h>
+typedef HINTERNET FeedSession;
+#else
+#include <curl/curl.h>
+#include <strings.h>
+#include <time.h>
+#define strnicmp strncasecmp
+typedef CURL *FeedSession;
+#endif
+#include <stdint.h>
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -161,7 +171,6 @@ static void set_timestamp(Json *article, char *date) {
     date = trim(date);
     size_t n = strlen(date);
     char iso[144];
-    SYSTEMTIME time;
     char calendar[11] = {0};
     if (n >= 10) memcpy(calendar, date, 10);
     if (n >= 19 && day(calendar) >= 0 && (date[10] == 'T' || date[10] == ' ')) {
@@ -169,11 +178,26 @@ static void set_timestamp(Json *article, char *date) {
         else snprintf(iso, sizeof iso, "%s", date);
         iso[10] = 'T';
         cJSON_AddStringToObject(article, "published", iso);
-    } else if (*date && InternetTimeToSystemTime(date, &time, 0)) {
+        return;
+    }
+#ifdef _WIN32
+    SYSTEMTIME time;
+    if (*date && InternetTimeToSystemTime(date, &time, 0)) {
         snprintf(iso, sizeof iso, "%04u-%02u-%02uT%02u:%02u:%02u+00:00",
                  time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute, time.wSecond);
         cJSON_AddStringToObject(article, "published", iso);
-    } else cJSON_AddNullToObject(article, "published");
+        return;
+    }
+#else
+    time_t time = *date ? curl_getdate(date, NULL) : -1;
+    struct tm utc;
+    if (time != (time_t)-1 && gmtime_r(&time, &utc) &&
+        strftime(iso, sizeof iso, "%Y-%m-%dT%H:%M:%S+00:00", &utc)) {
+        cJSON_AddStringToObject(article, "published", iso);
+        return;
+    }
+#endif
+    cJSON_AddNullToObject(article, "published");
 }
 
 static void add_article(const Network *net, const char *source, Item *item, Json *articles) {
@@ -277,7 +301,23 @@ invalid:
     return NULL;
 }
 
-static char *fetch(HINTERNET session, const char *url, size_t *size) {
+#ifdef _WIN32
+static FeedSession open_feeds(void) {
+    HINTERNET session = InternetOpenA("HarborShift/1.0 (public advisory reader)", INTERNET_OPEN_TYPE_PRECONFIG,
+                                     NULL, NULL, 0);
+    if (session) {
+        DWORD timeout = 5000, retries = 1;
+        InternetSetOptionA(session, INTERNET_OPTION_CONNECT_TIMEOUT, &timeout, sizeof timeout);
+        InternetSetOptionA(session, INTERNET_OPTION_RECEIVE_TIMEOUT, &timeout, sizeof timeout);
+        InternetSetOptionA(session, INTERNET_OPTION_CONNECT_RETRIES, &retries, sizeof retries);
+    }
+    return session;
+}
+
+static void close_feeds(FeedSession session) { InternetCloseHandle(session); }
+static uint64_t feed_clock(void) { return GetTickCount(); }
+
+static char *fetch(FeedSession session, const char *url, size_t *size) {
     HINTERNET request = InternetOpenUrlA(session, url, NULL, 0, INTERNET_FLAG_NO_UI |
         INTERNET_FLAG_NO_COOKIES | INTERNET_FLAG_NO_AUTH | INTERNET_FLAG_RELOAD |
         INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_NO_AUTO_REDIRECT, 0);
@@ -303,6 +343,48 @@ static char *fetch(HINTERNET session, const char *url, size_t *size) {
     return data;
 }
 
+#else
+static FeedSession open_feeds(void) { return curl_easy_init(); }
+static void close_feeds(FeedSession session) { curl_easy_cleanup(session); }
+
+static uint64_t feed_clock(void) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (uint64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000;
+}
+
+typedef struct { char *data; size_t used; } FeedBuffer;
+
+static size_t receive_feed(char *data, size_t size, size_t count, void *context) {
+    FeedBuffer *buffer = context;
+    if (size && count > (MAX_FEED - buffer->used) / size) return 0;
+    size_t bytes = size * count;
+    memcpy(buffer->data + buffer->used, data, bytes);
+    buffer->used += bytes;
+    return bytes;
+}
+
+static char *fetch(FeedSession session, const char *url, size_t *size) {
+    FeedBuffer buffer = {malloc(MAX_FEED + 1), 0};
+    if (!buffer.data) return NULL;
+    curl_easy_setopt(session, CURLOPT_URL, url);
+    curl_easy_setopt(session, CURLOPT_USERAGENT, "HarborShift/1.0 (public advisory reader)");
+    curl_easy_setopt(session, CURLOPT_TIMEOUT_MS, 5000L);
+    curl_easy_setopt(session, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(session, CURLOPT_WRITEFUNCTION, receive_feed);
+    curl_easy_setopt(session, CURLOPT_WRITEDATA, &buffer);
+    long status = 0;
+    if (curl_easy_perform(session) != CURLE_OK ||
+        curl_easy_getinfo(session, CURLINFO_RESPONSE_CODE, &status) != CURLE_OK || status != 200) {
+        free(buffer.data);
+        return NULL;
+    }
+    buffer.data[buffer.used] = 0;
+    *size = buffer.used;
+    return buffer.data;
+}
+#endif
+
 static int duplicate(Json *articles, Json *item) {
     char title[2050];
     normalize_text(title, str(item, "title"), 0);
@@ -323,21 +405,14 @@ void clear_news(void) {
 }
 
 Json *news(const Network *net) {
-    static DWORD loaded_at;
-    DWORD now = GetTickCount();
+    static uint64_t loaded_at;
+    uint64_t now = feed_clock();
     if (cached && now - loaded_at < 600000) return clone(cached);
     clear_news();
     cached = cJSON_CreateObject();
     Json *articles = cJSON_AddArrayToObject(cached, "articles");
     Json *errors = cJSON_AddArrayToObject(cached, "errors");
-    HINTERNET session = InternetOpenA("HarborShift/1.0 (public advisory reader)", INTERNET_OPEN_TYPE_PRECONFIG,
-                                     NULL, NULL, 0);
-    if (session) {
-        DWORD timeout = 5000, retries = 1;
-        InternetSetOptionA(session, INTERNET_OPTION_CONNECT_TIMEOUT, &timeout, sizeof timeout);
-        InternetSetOptionA(session, INTERNET_OPTION_RECEIVE_TIMEOUT, &timeout, sizeof timeout);
-        InternetSetOptionA(session, INTERNET_OPTION_CONNECT_RETRIES, &retries, sizeof retries);
-    }
+    FeedSession session = open_feeds();
     for (size_t i = 0; i < sizeof feeds / sizeof *feeds; ++i) {
         size_t size;
         char *xml = session ? fetch(session, feeds[i].url, &size) : NULL;
@@ -351,7 +426,7 @@ Json *news(const Network *net) {
         each(item, items) if (!duplicate(articles, item)) cJSON_AddItemToArray(articles, clone(item));
         cJSON_Delete(items);
     }
-    if (session) InternetCloseHandle(session);
-    loaded_at = GetTickCount();
+    if (session) close_feeds(session);
+    loaded_at = feed_clock();
     return clone(cached);
 }

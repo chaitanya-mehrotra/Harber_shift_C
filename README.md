@@ -23,6 +23,15 @@ python -m venv .venv
 
 The C server starts the predictor on the first ML request. It uses the project's `.venv` when present and otherwise looks for `python` on PATH. Set `HARBORSHIFT_PYTHON` to select a different executable. The simulator uses C rules for closures and when ML is unavailable. To retrain the original model, run `.\.venv\Scripts\python.exe -m harborshift.ml.train`.
 
+## Deploy on Render
+
+1. In the Render dashboard choose **New → Web Service** and connect this GitHub repo.
+2. Set the branch to **main** and select **Docker**. Leave **Root Directory** blank so Render finds the root Dockerfile. Leave **Docker Command** blank to use the image startup command.
+3. Choose an instance plan. Under **Advanced**, set **Health Check Path** to `/api/health`.
+4. Click **Deploy Web Service**. Open the service's `onrender.com` address once the service is live.
+
+The Docker image builds the C backend for Linux, serves the bundled dashboard, and includes the Python ML dependencies. The free plan can take about a minute to wake after inactivity.
+
 ## Start a simulation
 
 The welcome screen opens without a route or dashboard. Choose **Start simulation** to open Overview on the planned voyage with no disruption applied. Overview lists the manufacturing milestones and shows revised dates after applying an event. Use **Replay voyage** to replay the route animation. To try the Durban strike, choose **Simulate a disruption**, then **Apply event** with preset E001 selected.

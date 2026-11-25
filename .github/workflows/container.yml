@@ -1,0 +1,48 @@
+name: Test Linux container
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the Render image
+        run: docker build -t harborshift-test .
+      - name: Verify the dashboard, Dijkstra and Python model
+        run: |
+          docker run -d --name harborshift -e PORT=10001 -p 127.0.0.1:8184:10001 harborshift-test
+          trap 'docker logs harborshift; docker rm -f harborshift' EXIT
+          curl --retry 15 --retry-connrefused --retry-delay 1 -fsS http://127.0.0.1:8184/api/health
+          python3 - <<'PY'
+          import json
+          from urllib.request import Request, urlopen
+
+          base = "http://127.0.0.1:8184"
+          with urlopen(base + "/", timeout=10) as response:
+              assert b"<title>HarborShift</title>" in response.read()
+
+          def post(endpoint, payload):
+              req = Request(base + "/api/" + endpoint, json.dumps(payload).encode(),
+                            {"Content-Type": "application/json"})
+              with urlopen(req, timeout=25) as response:
+                  return json.load(response)
+
+          route = post("route", {"origin": "P03", "destination": "P11", "quantity_units": 10,
+                                 "units_per_container": 10, "closed_ports": ["P05"], "include_trace": True})
+          assert route["route_ids"] == ["R36", "R33", "R08"]
+          assert route["total_days"] == 32 and route["search_trace"][-1]["port_id"] == "P11"
+
+          report = post("simulate", {"as_of": "2027-01-05", "manufacturing": True, "sample_ids": ["E001"]})
+          assert report["estimated_penalties_inr"] == 5000
+
+          report = post("simulate", {"as_of": "2027-01-28", "shipment_id": "SH011", "use_ml": True,
+                                     "event": {"port_id": "P05", "event_type": "strike", "duration_days": 5,
+                                               "severity": 4, "port_status": "restricted", "start": "2027-01-29"}})
+          assert "synthetic_model" in report["prediction"]["sources"], report["prediction"]
+          PY

@@ -1,4 +1,20 @@
+#ifdef _WIN32
 #include <winsock2.h>
+#else
+#include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <strings.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <unistd.h>
+typedef int SOCKET;
+#define INVALID_SOCKET (-1)
+#define SOCKET_ERROR (-1)
+#define SD_SEND SHUT_WR
+#define closesocket close
+#define strnicmp strncasecmp
+#endif
 #include "backend.h"
 #include "cli.h"
 #include "data.h"
@@ -238,7 +254,28 @@ cleanup:
 
 static void interrupt(int signal_number) {
     (void)signal_number;
-    if (listener != INVALID_SOCKET) closesocket(listener);
+    if (listener != INVALID_SOCKET) {
+        closesocket(listener);
+        listener = INVALID_SOCKET;
+    }
+}
+
+static void prevent_inherit(SOCKET fd) {
+#ifdef _WIN32
+    SetHandleInformation((HANDLE)fd, HANDLE_FLAG_INHERIT, 0);
+#else
+    fcntl(fd, F_SETFD, FD_CLOEXEC);
+#endif
+}
+
+static void set_socket_timeouts(SOCKET fd) {
+#ifdef _WIN32
+    DWORD timeout = 5000;
+#else
+    struct timeval timeout = {5, 0};
+#endif
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof timeout);
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, (const char *)&timeout, sizeof timeout);
 }
 
 int main(int argc, char **argv) {
@@ -255,10 +292,11 @@ int main(int argc, char **argv) {
     int command = argc >= 2 && (eq(argv[1], "route") || eq(argv[1], "simulate") ||
                                 eq(argv[1], "neighbors") || eq(argv[1], "validate"));
     if (command && source && eq(argv[1], "validate")) return validate_csv(source, 0);
-    if (!command && argc == 2) {
+    const char *port_value = argc == 2 ? argv[1] : getenv("PORT");
+    if (!command && argc <= 2 && port_value && *port_value) {
         char *end;
-        long value = strtol(argv[1], &end, 10);
-        if (end == argv[1] || *end || value < 1 || value > 65535) {
+        long value = strtol(port_value, &end, 10);
+        if (end == port_value || *end || value < 1 || value > 65535) {
             fprintf(stderr, "Port must be an integer from 1 to 65535.\n");
             return 1;
         }
@@ -292,30 +330,40 @@ int main(int argc, char **argv) {
         network_destroy(&net);
         return result;
     }
+#ifdef _WIN32
     WSADATA wsa;
     if (WSAStartup(MAKEWORD(2, 2), &wsa)) { network_destroy(&net); return 1; }
+#else
+    signal(SIGPIPE, SIG_IGN);
+#endif
     listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (listener != INVALID_SOCKET) SetHandleInformation((HANDLE)listener, HANDLE_FLAG_INHERIT, 0);
+    if (listener != INVALID_SOCKET) prevent_inherit(listener);
     struct sockaddr_in addr = {0};
     addr.sin_family = AF_INET;
     addr.sin_port = htons((unsigned short)port);
-    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    const char *bind_all = getenv("HARBORSHIFT_BIND_ALL");
+    int public_bind = bind_all && eq(bind_all, "1");
+    addr.sin_addr.s_addr = htonl(public_bind ? INADDR_ANY : INADDR_LOOPBACK);
+    const char *host = public_bind ? "0.0.0.0" : "127.0.0.1";
     int exit_code = 0;
     if (listener == INVALID_SOCKET || bind(listener, (struct sockaddr *)&addr, sizeof addr) == SOCKET_ERROR ||
         listen(listener, SOMAXCONN) == SOCKET_ERROR) {
-        fprintf(stderr, "Could not listen on 127.0.0.1:%d (Winsock error %d).\n", port, WSAGetLastError());
+#ifdef _WIN32
+        fprintf(stderr, "Could not listen on %s:%d (Winsock error %d).\n", host, port, WSAGetLastError());
+#else
+        fprintf(stderr, "Could not listen on %s:%d: %s\n", host, port, strerror(errno));
+#endif
         exit_code = 1;
     } else {
         signal(SIGINT, interrupt);
-        printf("HarborShift C server ready at http://127.0.0.1:%d/\n", port);
+        signal(SIGTERM, interrupt);
+        printf("HarborShift C server ready at http://%s:%d/\n", host, port);
         fflush(stdout);
         for (;;) {
             SOCKET client = accept(listener, NULL, NULL);
             if (client == INVALID_SOCKET) break;
-            SetHandleInformation((HANDLE)client, HANDLE_FLAG_INHERIT, 0);
-            DWORD timeout = 5000;
-            setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof timeout);
-            setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, (const char *)&timeout, sizeof timeout);
+            prevent_inherit(client);
+            set_socket_timeouts(client);
             handle(client, &net);
             shutdown(client, SD_SEND);
             closesocket(client);
@@ -323,8 +371,10 @@ int main(int argc, char **argv) {
     }
     stop_model();
     clear_news();
-    closesocket(listener);
+    if (listener != INVALID_SOCKET) closesocket(listener);
+#ifdef _WIN32
     WSACleanup();
+#endif
     network_destroy(&net);
     return exit_code;
 }

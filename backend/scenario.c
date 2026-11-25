@@ -2,8 +2,12 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
 #include <windows.h>
 #include <rpc.h>
+#else
+#include <uuid/uuid.h>
+#endif
 
 static void add_event(Scenario *s, Json *item, int sample) {
     Event event = {0};
@@ -277,6 +281,7 @@ Json *simulate(const Network *net, Json *query, Error *error) {
     if (error->message[0]) return NULL;
 
     Json *out = cJSON_CreateObject();
+#ifdef _WIN32
     UUID uuid;
     unsigned char *guid = NULL;
     UuidCreate(&uuid);
@@ -284,6 +289,13 @@ Json *simulate(const Network *net, Json *query, Error *error) {
         cJSON_AddStringToObject(out, "scenario_id", (char *)guid);
         RpcStringFreeA(&guid);
     }
+#else
+    uuid_t uuid;
+    char guid[37];
+    uuid_generate_random(uuid);
+    uuid_unparse_lower(uuid, guid);
+    cJSON_AddStringToObject(out, "scenario_id", guid);
+#endif
     set_day(out, "as_of", s.as_of);
     cJSON_AddBoolToObject(out, "manufacturing", !!s.demo);
     cJSON_AddNumberToObject(out, "total_shipments", cJSON_GetArraySize(table(&s, "shipments")));
