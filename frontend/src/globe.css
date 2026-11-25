@@ -1,0 +1,279 @@
+.globe-workspace {
+  position: relative;
+  min-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  background: radial-gradient(circle at 50% 48%, #0e2036 0%, #050b14 75%);
+  overflow: hidden;
+}
+
+.globe-frame {
+  --globe-background: transparent;
+  --globe-grid: rgba(130, 165, 204, 0.2);
+  --globe-land: #243b4a;
+  --globe-coast: #4f7989;
+  --globe-ocean-top: #183658;
+  --globe-ocean-bottom: #081322;
+  --globe-rim: rgba(97, 219, 196, 0.32);
+  --globe-port: #9fc0d4;
+  --globe-port-active: #61DBC4;
+  --globe-text: #F4F1E8;
+  --globe-label-outline: #091321;
+  position: relative;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.globe-surface {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 520px;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  overflow: hidden;
+}
+
+.globe-surface:active {
+  cursor: grabbing;
+}
+
+.globe-surface svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 520px;
+}
+
+.globe-ocean {
+  stroke: var(--globe-rim);
+  stroke-width: 1.5;
+}
+
+.globe-ocean-light {
+  stop-color: var(--globe-ocean-top);
+}
+
+.globe-ocean-dark {
+  stop-color: var(--globe-ocean-bottom);
+}
+
+.globe-land {
+  fill: var(--globe-land);
+  stroke: var(--globe-coast);
+  stroke-width: 0.75;
+}
+
+.globe-grid {
+  fill: none;
+  stroke: var(--globe-grid);
+  stroke-width: 0.6;
+}
+
+.globe-frame .edge {
+  fill: none;
+  stroke: rgba(138, 168, 194, 0.35);
+  stroke-width: 1.15;
+}
+
+.globe-frame .edge.focused {
+  stroke: rgba(97, 219, 196, 0.65);
+  stroke-width: 1.9;
+}
+
+.globe-frame .edge.affected {
+  stroke: var(--amber);
+  stroke-dasharray: 5 4;
+  stroke-width: 2.2;
+}
+
+.globe-frame .edge.chosen {
+  stroke: var(--cyan);
+  stroke-width: 2.6;
+}
+
+.globe-port {
+  cursor: pointer;
+}
+
+.globe-port-hit {
+  fill: transparent;
+}
+
+.globe-port-dot {
+  fill: var(--globe-port);
+  stroke: var(--globe-label-outline);
+  stroke-width: 1.8;
+}
+
+.globe-port.active .globe-port-dot {
+  fill: var(--globe-port-active);
+  stroke-width: 2.4;
+}
+
+.globe-port.affected .globe-port-dot {
+  fill: var(--amber);
+}
+
+.globe-port-ring {
+  fill: rgba(255, 180, 94, 0.16);
+  stroke: var(--amber);
+  stroke-width: 2;
+}
+
+.globe-port text {
+  font-size: 0.85rem;
+  font-weight: 700;
+  fill: var(--globe-text);
+  stroke: var(--globe-label-outline);
+  stroke-width: 3.5;
+  stroke-linejoin: round;
+  paint-order: stroke;
+}
+
+.globe-popover {
+  position: absolute;
+  z-index: 15;
+  width: min(310px, calc(100% - 2rem));
+  padding: 1rem 1.1rem;
+  border-radius: 12px;
+  background: rgba(16, 29, 44, 0.94);
+  border: 1px solid var(--border-subtle);
+  box-shadow: 0 20px 44px rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(12px);
+  display: grid;
+  gap: 0.45rem;
+}
+
+.globe-popover.disrupted {
+  border-color: var(--amber-border);
+}
+
+.globe-popover-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+  margin-top: 0.4rem;
+}
+
+.globe-popover-actions button {
+  font-size: 0.82rem;
+  padding: 0.45rem 0.6rem;
+}
+
+.globe-controls-dock {
+  position: absolute;
+  right: clamp(1rem, 3vw, 2.2rem);
+  bottom: 4.5rem;
+  z-index: 15;
+  display: grid;
+  gap: 0.6rem;
+  justify-items: end;
+}
+
+.globe-buttons {
+  display: flex;
+  gap: 0.35rem;
+  padding: 0.35rem;
+  border-radius: 10px;
+  background: rgba(16, 29, 44, 0.9);
+  border: 1px solid var(--border-subtle);
+}
+
+.globe-buttons button {
+  padding: 0.42rem 0.7rem;
+  font-size: 0.85rem;
+}
+
+.globe-legend {
+  display: flex;
+  gap: 0.95rem;
+  flex-wrap: wrap;
+  padding: 0.48rem 0.85rem;
+  border-radius: 10px;
+  background: rgba(16, 29, 44, 0.9);
+  border: 1px solid var(--border-subtle);
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.globe-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.legend-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+
+.legend-dot.available { background: #3d7d7d; }
+.legend-dot.disrupted { background: var(--amber); }
+.legend-dot.active { background: var(--cyan); }
+
+.globe-bottom-strip {
+  position: relative;
+  z-index: 16;
+  margin: 0 clamp(1rem, 3vw, 2.2rem) 1rem;
+  padding: 0.72rem 1.15rem;
+  border-radius: 12px;
+  background: rgba(16, 29, 44, 0.92);
+  border: 1px solid var(--border-subtle);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem;
+  font-size: 0.9rem;
+}
+
+.route-lookup-wrap {
+  width: min(100%, 1520px);
+  margin: 1.25rem auto 2rem;
+  padding: 0 clamp(1rem, 3vw, 2.2rem);
+}
+
+.search-playback {
+  margin-bottom: .85rem;
+  scroll-margin-top: 5rem;
+}
+
+.search-playback-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: .5rem;
+  margin-bottom: .6rem;
+}
+
+.search-playback-controls h2 {
+  margin: 0 .5rem 0 0;
+}
+
+.search-key { margin-top: .55rem; }
+.route-lookup-wrap a { color: #73eee5; }
+
+.globe-frame .edge.search-update {
+  stroke: #58f4ec;
+  stroke-width: 3;
+  opacity: 1;
+}
+
+.globe-port.search-settled .globe-port-dot { fill: #71afff; }
+.globe-port.search-closed .globe-port-dot { fill: #ff606f; }
+.globe-port.search-current .globe-port-dot { fill: #ffe079; }
+.globe-port.search-current .globe-port-ring { stroke: #ffe079; }
+
+.search-line-motion { pointer-events: none; }
+.globe-frame .search-line-motion .search-line-trail,
+.globe-frame .search-line-motion .search-line-beacon {
+  animation-duration: .76s;
+  animation-delay: .12s;
+}
+@media (prefers-reduced-motion: reduce) {
+  .search-line-motion { display: none; }
+}
